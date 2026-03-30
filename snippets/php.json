@@ -1,0 +1,56 @@
+{
+  "public function": {
+    "prefix": "pubf",
+    "body": [
+      "public function ${1:name}(${2}): ${3:void}",
+      "{",
+      "\t$0",
+      "}"
+    ],
+    "description": "Public function"
+  },
+  "protected function": {
+    "prefix": "prof",
+    "body": [
+      "protected function ${1:name}(${2}): ${3:void}",
+      "{",
+      "\t$0",
+      "}"
+    ],
+    "description": "Protected function"
+  },
+  "private function": {
+    "prefix": "prif",
+    "body": [
+      "private function ${1:name}(${2}): ${3:void}",
+      "{",
+      "\t$0",
+      "}"
+    ],
+    "description": "Private function"
+  },
+  "method": {
+    "prefix": "met",
+    "body": [
+      "public function ${1:name}(${2}): ${3:void}",
+      "{",
+      "\t$0",
+      "}"
+    ],
+    "description": "Public function (method alias)"
+  },
+  "dd": {
+    "prefix": "dd",
+    "body": [
+      "dd($1);$0"
+    ],
+    "description": "Dump and die"
+  },
+  "dump": {
+    "prefix": "dump",
+    "body": [
+      "dump($1);$0"
+    ],
+    "description": "Dump"
+  }
+}
