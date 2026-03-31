@@ -71,7 +71,7 @@ vim.o.confirm = true
 
 -- Keep sessions from restoring a stale global cwd. Project-root switching below
 -- will set cwd from the active file instead.
-vim.o.sessionoptions = 'blank,buffers,folds,help,tabpages,winsize,winpos,terminal,localoptions'
+vim.o.sessionoptions = 'blank,folds,help,tabpages,winsize,winpos,terminal,localoptions'
 
 -- Clear highlights on search when pressing <Esc> in normal mode
 --  See `:help hlsearch`
@@ -203,6 +203,66 @@ local function project_root(path)
   end
 
   return root or vim.fn.getcwd()
+end
+
+local function open_lazygit_tab(cmd, cwd)
+  local previous_tab = vim.api.nvim_get_current_tabpage()
+
+  vim.cmd.tabnew()
+
+  local tabpage = vim.api.nvim_get_current_tabpage()
+  local bufnr = vim.api.nvim_get_current_buf()
+
+  vim.bo[bufnr].buflisted = false
+
+  vim.fn.termopen(cmd, {
+    cwd = cwd,
+    on_exit = function()
+      vim.schedule(function()
+        if vim.api.nvim_tabpage_is_valid(tabpage) then
+          vim.api.nvim_set_current_tabpage(tabpage)
+          vim.cmd('silent! tabclose')
+        end
+
+        if vim.api.nvim_tabpage_is_valid(previous_tab) then
+          vim.api.nvim_set_current_tabpage(previous_tab)
+        end
+
+        vim.cmd('silent! checktime')
+      end)
+    end,
+  })
+
+  vim.cmd.startinsert()
+end
+
+local function open_project_lazygit()
+  local bufname = vim.api.nvim_buf_get_name(0)
+  local git_root = project_root(bufname ~= '' and bufname or vim.uv.cwd())
+
+  if vim.uv.fs_stat(vim.fs.joinpath(git_root, '.git')) == nil then
+    vim.notify('Current buffer is not inside a git repository', vim.log.levels.WARN)
+    return
+  end
+
+  open_lazygit_tab({ 'lazygit', '-p', git_root }, git_root)
+end
+
+local function open_current_file_lazygit()
+  local path = vim.api.nvim_buf_get_name(0)
+  if path == '' then
+    vim.notify('Current buffer has no file path', vim.log.levels.WARN)
+    return
+  end
+
+  local git_root = project_root(path)
+  if vim.uv.fs_stat(vim.fs.joinpath(git_root, '.git')) == nil then
+    vim.notify('Current buffer is not inside a git repository', vim.log.levels.WARN)
+    return
+  end
+
+  local relative_path = vim.fs.relpath(git_root, path) or vim.fn.fnamemodify(path, ':.')
+  open_lazygit_tab({ 'lazygit', '-p', git_root, '-f', relative_path }, git_root)
 end
 
 local phpactor_lsp_config = {
@@ -337,6 +397,47 @@ vim.api.nvim_create_autocmd('FileType', {
   end,
 })
 
+local function is_vendor_path(path)
+  if type(path) ~= 'string' or path == '' then return false end
+
+  path = path:gsub('\\', '/')
+  return path == 'vendor' or path:match('^vendor/') ~= nil or path:match('/vendor/') ~= nil
+end
+
+local function with_vendor_bias(base_sorter)
+  local original_scoring = base_sorter.scoring_function
+
+  base_sorter.scoring_function = function(self, prompt, line, entry, cb_add, cb_filter)
+    local score = original_scoring(self, prompt, line, entry, cb_add, cb_filter)
+    if type(score) ~= 'number' or score < 0 then return score end
+
+    local path = entry and (entry.filename or entry.path or entry.value)
+    if is_vendor_path(path) then
+      return score + 0.05
+    end
+
+    return score
+  end
+
+  return base_sorter
+end
+
+local function vendor_file_sorter(opts)
+  return with_vendor_bias(require('telescope.sorters').get_fuzzy_file(opts))
+end
+
+local function vendor_generic_sorter(opts)
+  return with_vendor_bias(require('telescope.sorters').get_generic_fuzzy_sorter(opts))
+end
+
+local function grep_additional_args()
+  return {
+    '--no-ignore',
+    '--glob=!**/node_modules/**',
+    '--glob=!**/var/**',
+  }
+end
+
 -- [[ Install `lazy.nvim` plugin manager ]]
 --    See `:help lazy.nvim.txt` or https://github.com/folke/lazy.nvim for more info
 local lazypath = vim.fn.stdpath 'data' .. '/lazy/lazy.nvim'
@@ -463,6 +564,7 @@ require('lazy').setup({
 
       -- Document existing key chains
       spec = {
+        { '<leader>g', group = '[G]it' },
         { '<leader>s', group = '[S]earch', mode = { 'n', 'v' } },
         { '<leader>p', group = '[P]HP Actions' },
         { '<leader>t', group = '[T]oggle' },
@@ -490,45 +592,67 @@ require('lazy').setup({
         cond = function() return vim.fn.executable 'make' == 1 end,
       },
       { 'nvim-telescope/telescope-ui-select.nvim' },
+      {
+        'nvim-telescope/telescope-live-grep-args.nvim',
+        version = '^1.1.0',
+      },
 
       -- Useful for getting pretty icons, but requires a Nerd Font.
       { 'nvim-tree/nvim-web-devicons', enabled = vim.g.have_nerd_font },
     },
     config = function()
-      require('telescope').setup {
+      local telescope = require 'telescope'
+      local lga_actions = require 'telescope-live-grep-args.actions'
+
+      telescope.setup {
         -- pickers = {}
         extensions = {
+          live_grep_args = {
+            auto_quoting = true,
+            mappings = {
+              i = {
+                ['<C-k>'] = lga_actions.quote_prompt(),
+                ['<C-i>'] = lga_actions.quote_prompt { postfix = ' --iglob ' },
+                ['<C-t>'] = lga_actions.quote_prompt { postfix = ' -t' },
+              },
+            },
+          },
           ['ui-select'] = { require('telescope.themes').get_dropdown() },
         },
       }
 
       -- Enable Telescope extensions if they are installed
-      pcall(require('telescope').load_extension, 'fzf')
-      pcall(require('telescope').load_extension, 'ui-select')
+      pcall(telescope.load_extension, 'fzf')
+      pcall(telescope.load_extension, 'ui-select')
+      pcall(telescope.load_extension, 'live_grep_args')
       -- See `:help telescope.builtin`
       local builtin = require 'telescope.builtin'
+      local live_grep_args = telescope.extensions.live_grep_args.live_grep_args
       vim.keymap.set('n', '<leader>sh', builtin.help_tags, { desc = '[S]earch [H]elp' })
       vim.keymap.set('n', '<leader>sk', builtin.keymaps, { desc = '[S]earch [K]eymaps' })
       vim.keymap.set('n', '<leader>sf', function()
         builtin.find_files {
           hidden = true,
           no_ignore = true,
+          sorter = vendor_file_sorter(),
           file_ignore_patterns = {
             '^.git/',
             '^node_modules/',
             '/node_modules/',
+            '^var/',
+            '/var/',
           },
         }
       end, { desc = '[S]earch [F]iles' })
       vim.keymap.set('n', '<leader>ss', builtin.builtin, { desc = '[S]earch [S]elect Telescope' })
-      vim.keymap.set({ 'n', 'v' }, '<leader>sw', builtin.grep_string, { desc = '[S]earch current [W]ord' })
-      vim.keymap.set('n', '<leader>sg', builtin.live_grep, { desc = '[S]earch by [G]rep' })
+      vim.keymap.set({ 'n', 'v' }, '<leader>sw', function() builtin.grep_string { sorter = vendor_generic_sorter(), additional_args = grep_additional_args } end, { desc = '[S]earch current [W]ord' })
+      vim.keymap.set('n', '<leader>sg', function() live_grep_args { sorter = vendor_generic_sorter(), additional_args = grep_additional_args } end, { desc = '[S]earch by [G]rep with args' })
       vim.keymap.set('n', '<leader>sd', builtin.diagnostics, { desc = '[S]earch [D]iagnostics' })
       vim.keymap.set('n', '<leader>sr', builtin.resume, { desc = '[S]earch [R]esume' })
       vim.keymap.set('n', '<leader>s.', function()
         builtin.oldfiles {
           cwd_only = false,
-          include_current_session = true,
+          include_current_session = false,
         }
       end, { desc = '[S]earch Recent Files ("." for repeat)' })
       vim.keymap.set('n', '<leader>sc', builtin.commands, { desc = '[S]earch [C]ommands' })
@@ -555,13 +679,15 @@ require('lazy').setup({
           builtin.live_grep {
             grep_open_files = true,
             prompt_title = 'Live Grep in Open Files',
+            sorter = vendor_generic_sorter(),
+            additional_args = grep_additional_args,
           }
         end,
         { desc = '[S]earch [/] in Open Files' }
       )
 
       -- Shortcut for searching your Neovim configuration files
-      vim.keymap.set('n', '<leader>sn', function() builtin.find_files { cwd = vim.fn.stdpath 'config' } end, { desc = '[S]earch [N]eovim files' })
+      vim.keymap.set('n', '<leader>sn', function() builtin.find_files { cwd = vim.fn.stdpath 'config', sorter = vendor_file_sorter(), file_ignore_patterns = { '^var/', '/var/' } } end, { desc = '[S]earch [N]eovim files' })
     end,
   },
 
@@ -622,8 +748,8 @@ require('lazy').setup({
           map('grt', builtin.lsp_type_definitions, '[G]oto [T]ype Definition')
 
           -- Fuzzy find symbols in the current document or workspace.
-          map('gO', builtin.lsp_document_symbols, 'Open Document Symbols')
-          map('gW', builtin.lsp_dynamic_workspace_symbols, 'Open Workspace Symbols')
+          map('gO', function() builtin.lsp_document_symbols { sorter = vendor_generic_sorter() } end, 'Open Document Symbols')
+          map('gW', function() builtin.lsp_dynamic_workspace_symbols { sorter = vendor_generic_sorter() } end, 'Open Workspace Symbols')
 
           -- The following two autocommands are used to highlight references of the
           -- word under your cursor when your cursor rests there for a little while.
@@ -1074,21 +1200,28 @@ require('lazy').setup({
     keys = {
       {
         '<leader>gg',
-        function()
-          local bufname = vim.api.nvim_buf_get_name(0)
-          local git_root = project_root(bufname ~= '' and bufname or vim.uv.cwd())
-
-          if vim.uv.fs_stat(vim.fs.joinpath(git_root, '.git')) ~= nil then
-            require('lazygit').lazygit(git_root)
-          else
-            vim.notify('Current buffer is not inside a git repository', vim.log.levels.WARN)
-          end
-        end,
+        open_project_lazygit,
         desc = 'Open Lazy[G]it for current project',
       },
-      { '<leader>gf', '<cmd>LazyGitFilterCurrentFile<CR>', desc = 'Open LazyGit history for current [f]ile' },
+      { '<leader>gf', open_current_file_lazygit, desc = 'Open LazyGit history for current [f]ile' },
     },
   },
+  {
+    'sindrets/diffview.nvim',
+    cmd = {
+      'DiffviewOpen',
+      'DiffviewFileHistory',
+      'DiffviewClose',
+      'DiffviewRefresh',
+    },
+    keys = {
+      { '<leader>gd', '<cmd>DiffviewOpen<CR>', desc = 'Open [D]iffview' },
+      { '<leader>gD', '<cmd>DiffviewClose<CR>', desc = 'Close [D]iffview' },
+      { '<leader>gh', '<cmd>DiffviewFileHistory %<CR>', desc = 'Current File [H]istory' },
+      { '<leader>gH', '<cmd>DiffviewFileHistory<CR>', desc = 'Project [H]istory' },
+      { '<leader>gr', '<cmd>DiffviewRefresh<CR>', desc = '[R]efresh Diffview' },
+    },
+  }
 }, { ---@diagnostic disable-line: missing-fields
   ui = {
     -- If you are using a Nerd Font: set icons to an empty table which will use the
