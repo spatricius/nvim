@@ -116,7 +116,8 @@ function M.phpactor_exclude_patterns()
   local patterns = {}
 
   for _, dir in ipairs(excluded_dirs) do
-    table.insert(patterns, ('/%s/**/*'):format(dir))
+    table.insert(patterns, ('%s/**/*'):format(dir))
+    table.insert(patterns, ('%s/**'):format(dir))
   end
 
   return patterns

@@ -39,6 +39,61 @@ local function copy_all_messages()
   copy_to_clipboard(result.output or '', 'No messages to copy')
 end
 
+local function get_line_range(is_visual)
+  local line_count = vim.api.nvim_buf_line_count(0)
+  local line_start = is_visual and vim.fn.line 'v' or vim.fn.line '.'
+  local line_end = vim.fn.line '.'
+
+  line_start = math.max(1, math.min(line_start, line_count))
+  line_end = math.max(1, math.min(line_end, line_count))
+
+  if line_start > line_end then
+    line_start, line_end = line_end, line_start
+  end
+
+  return line_start, line_end, line_count
+end
+
+local function toggle_line_comment_range(line_start, line_end)
+  local lines = vim.api.nvim_buf_get_lines(0, line_start - 1, line_end, false)
+  local should_uncomment = true
+
+  for _, line in ipairs(lines) do
+    if vim.trim(line) ~= '' and not line:match '^%s*//%s?' then
+      should_uncomment = false
+      break
+    end
+  end
+
+  for i, line in ipairs(lines) do
+    if vim.trim(line) ~= '' then
+      if should_uncomment then
+        lines[i] = line:gsub('^(%s*)//%s?', '%1', 1)
+      else
+        lines[i] = line:gsub('^(%s*)', '%1// ', 1)
+      end
+    end
+  end
+
+  vim.api.nvim_buf_set_lines(0, line_start - 1, line_end, false, lines)
+end
+
+local function toggle_line_comment()
+  local line_start, line_end, line_count = get_line_range(false)
+
+  toggle_line_comment_range(line_start, line_end)
+
+  vim.api.nvim_win_set_cursor(0, { math.min(line_end + 1, line_count), 0 })
+end
+
+local function toggle_line_comment_selection()
+  local line_start, line_end, line_count = get_line_range(true)
+
+  toggle_line_comment_range(line_start, line_end)
+
+  vim.api.nvim_win_set_cursor(0, { math.min(line_end + 1, line_count), 0 })
+end
+
 local function copy_buffer_diagnostics()
   local diagnostics = vim.diagnostic.get(0)
   if vim.tbl_isempty(diagnostics) then
@@ -74,6 +129,15 @@ function M.setup()
   -- General editor behavior
   vim.keymap.set('n', '<Esc>', '<cmd>nohlsearch<CR>')
   vim.keymap.set({ 'i', 'c', 'n' }, '<C-S-V>', '<C-r>+')
+  vim.keymap.set('i', 'jk', '<Esc>', { desc = 'Exit insert mode' })
+  vim.keymap.set('n', '<M-/>', toggle_line_comment, { desc = 'Toggle // line comment and move down' })
+  vim.keymap.set('x', '<M-/>', toggle_line_comment_selection, { desc = 'Toggle // line comment selection and move down' })
+  vim.keymap.set('n', 'gcl', toggle_line_comment, { desc = 'Toggle // line comment' })
+  vim.keymap.set('x', 'gcl', toggle_line_comment_selection, { desc = 'Toggle // line comment selection' })
+  vim.keymap.set('n', '<A-j>', '<cmd>move .+1<CR>==', { desc = 'Move current line down' })
+  vim.keymap.set('n', '<A-k>', '<cmd>move .-2<CR>==', { desc = 'Move current line up' })
+  vim.keymap.set('v', '<A-j>', ":move '>+1<CR>gv=gv", { desc = 'Move selection down' })
+  vim.keymap.set('v', '<A-k>', ":move '<-2<CR>gv=gv", { desc = 'Move selection up' })
   vim.keymap.set('n', '<leader>q', vim.diagnostic.setloclist, { desc = 'Open diagnostic [Q]uickfix list' })
   vim.keymap.set('n', '<leader>f', function()
     require('conform').format { async = true, lsp_format = 'fallback' }
@@ -229,21 +293,28 @@ function M.repeat_symfony_console_command()
 end
 
 function M.setup_debug_keymaps()
-  local function with_dap(fn)
+  local function with_dap(module_name, fn)
     return function()
-      require('lazy').load { plugins = { 'mfussenegger/nvim-dap' } }
-      fn()
+      require('lazy').load { plugins = { 'nvim-dap' } }
+
+      local ok, module = pcall(require, module_name)
+      if not ok then
+        vim.notify('Debug support is unavailable: ' .. module_name, vim.log.levels.ERROR)
+        return
+      end
+
+      fn(module)
     end
   end
 
   -- Debugging
-  vim.keymap.set('n', '<F5>', with_dap(function() require('dapui').toggle() end), { desc = 'Debug: See last session result.' })
-  vim.keymap.set('n', '<F7>', with_dap(function() require('dap').step_into() end), { desc = 'Debug: Step Into' })
-  vim.keymap.set('n', '<F8>', with_dap(function() require('dap').step_over() end), { desc = 'Debug: Step Over' })
-  vim.keymap.set('n', '<F9>', with_dap(function() require('dap').continue() end), { desc = 'Debug: Start/Continue' })
-  vim.keymap.set('n', '<F10>', with_dap(function() require('dap').step_out() end), { desc = 'Debug: Step Out' })
-  vim.keymap.set('n', '<leader>b', with_dap(function() require('dap').toggle_breakpoint() end), { desc = 'Debug: Toggle Breakpoint' })
-  vim.keymap.set('n', '<leader>B', with_dap(function() require('dap').set_breakpoint(vim.fn.input 'Breakpoint condition: ') end), { desc = 'Debug: Set Breakpoint' })
+  vim.keymap.set('n', '<F5>', with_dap('dapui', function(dapui) dapui.toggle() end), { desc = 'Debug: See last session result.' })
+  vim.keymap.set('n', '<F7>', with_dap('dap', function(dap) dap.step_into() end), { desc = 'Debug: Step Into' })
+  vim.keymap.set('n', '<F8>', with_dap('dap', function(dap) dap.step_over() end), { desc = 'Debug: Step Over' })
+  vim.keymap.set('n', '<F9>', with_dap('dap', function(dap) dap.continue() end), { desc = 'Debug: Start/Continue' })
+  vim.keymap.set('n', '<F10>', with_dap('dap', function(dap) dap.step_out() end), { desc = 'Debug: Step Out' })
+  vim.keymap.set('n', '<leader>b', with_dap('dap', function(dap) dap.toggle_breakpoint() end), { desc = 'Debug: Toggle Breakpoint' })
+  vim.keymap.set('n', '<leader>B', with_dap('dap', function(dap) dap.set_breakpoint(vim.fn.input 'Breakpoint condition: ') end), { desc = 'Debug: Set Breakpoint' })
 end
 
 local php_function_node_types = {
@@ -270,6 +341,208 @@ end
 local function current_php_function_node(buf)
   local cursor = vim.api.nvim_win_get_cursor(0)
   return php_function_node_at_position(buf, cursor[1] - 1, cursor[2])
+end
+
+local php_class_node_types = {
+  class_declaration = true,
+  trait_declaration = true,
+  interface_declaration = true,
+  anonymous_class = true,
+}
+
+local function php_named_node_at_position(buf, row, col)
+  local ok, parser = pcall(vim.treesitter.get_parser, buf, 'php')
+  if not ok then return nil end
+
+  local tree = parser:parse()[1]
+  if tree == nil then return nil end
+
+  return tree:root():named_descendant_for_range(row, col, row, col)
+end
+
+local function php_ancestor_node(node, allowed_types)
+  while node do
+    if allowed_types[node:type()] then return node end
+    node = node:parent()
+  end
+
+  return nil
+end
+
+local function php_node_text(buf, node)
+  if node == nil then return nil end
+
+  local text = vim.treesitter.get_node_text(node, buf)
+  if type(text) == 'table' then return table.concat(text, '\n') end
+  return text
+end
+
+local function php_current_property_nodes(buf)
+  local cursor = vim.api.nvim_win_get_cursor(0)
+  local node = php_named_node_at_position(buf, cursor[1] - 1, cursor[2])
+  if node == nil then return nil, nil end
+
+  local property_element = php_ancestor_node(node, { property_element = true })
+  local property_declaration = php_ancestor_node(node, { property_declaration = true })
+  if property_declaration == nil then return nil, nil end
+
+  if property_element == nil then
+    for child in property_declaration:iter_children() do
+      if child:type() == 'property_element' then
+        property_element = child
+        break
+      end
+    end
+  end
+
+  return property_declaration, property_element
+end
+
+local function php_extract_property_type(declaration_text)
+  local prefix = declaration_text:match('^%s*(.-)%$[%a_][%w_]*')
+  if prefix == nil then return nil end
+
+  prefix = prefix
+    :gsub('%f[%w]public%f[%W]', ' ')
+    :gsub('%f[%w]protected%f[%W]', ' ')
+    :gsub('%f[%w]private%f[%W]', ' ')
+    :gsub('%f[%w]static%f[%W]', ' ')
+    :gsub('%f[%w]var%f[%W]', ' ')
+    :gsub('%f[%w]readonly%f[%W]', ' ')
+
+  prefix = vim.trim(prefix:gsub('%s+', ' '))
+  if prefix == '' then return nil end
+
+  return prefix
+end
+
+local function php_studly_case(name)
+  local result = name:gsub('[_-]+([%w])', function(char) return char:upper() end)
+  return (result:gsub('^([%a])', string.upper))
+end
+
+local function php_method_name_node_text(buf, node)
+  for child in node:iter_children() do
+    if child:type() == 'name' then return php_node_text(buf, child) end
+  end
+
+  return nil
+end
+
+local function php_class_method_names(buf, class_node)
+  local method_names = {}
+  local stack = { class_node }
+
+  while #stack > 0 do
+    local node = table.remove(stack)
+    if node:type() == 'method_declaration' then
+      local method_name = php_method_name_node_text(buf, node)
+      if method_name ~= nil then method_names[method_name] = true end
+    elseif node == class_node or not php_class_node_types[node:type()] then
+      for child in node:iter_children() do
+        table.insert(stack, child)
+      end
+    end
+  end
+
+  return method_names
+end
+
+local function php_property_accessors(buf)
+  local property_declaration, property_element = php_current_property_nodes(buf)
+  if property_declaration == nil or property_element == nil then
+    vim.notify('Cursor is not on a PHP property', vim.log.levels.WARN)
+    return
+  end
+
+  local class_node = php_ancestor_node(property_declaration, php_class_node_types)
+  if class_node == nil then
+    vim.notify('Property is not inside a PHP class, trait, or interface', vim.log.levels.WARN)
+    return
+  end
+
+  local property_text = php_node_text(buf, property_element) or ''
+  local property_name = property_text:match('%$([%a_][%w_]*)')
+  if property_name == nil then
+    vim.notify('Could not determine the property name', vim.log.levels.WARN)
+    return
+  end
+
+  local declaration_text = (php_node_text(buf, property_declaration) or ''):gsub('%s+', ' ')
+  local property_type = php_extract_property_type(declaration_text)
+  local is_readonly = declaration_text:match('%f[%w]readonly%f[%W]') ~= nil
+  local studly_name = php_studly_case(property_name)
+  local is_prefixed_boolean = property_name:match('^is%u') or property_name:match('^has%u')
+  local is_boolean = property_type == 'bool'
+  local getter_name
+
+  if is_prefixed_boolean then
+    getter_name = property_name
+  elseif is_boolean then
+    getter_name = 'is' .. studly_name
+  else
+    getter_name = 'get' .. studly_name
+  end
+
+  local setter_name = 'set' .. studly_name
+  local method_names = php_class_method_names(buf, class_node)
+  local _, class_start_col = class_node:start()
+  local indent = string.rep(' ', class_start_col)
+  local method_indent = indent .. '    '
+  local body_indent = method_indent .. '    '
+  local methods = {}
+  local generated = {}
+
+  if not method_names[getter_name] then
+    local getter_lines = {
+      method_indent .. 'public function ' .. getter_name .. '()',
+      method_indent .. '{',
+      body_indent .. 'return $this->' .. property_name .. ';',
+      method_indent .. '}',
+    }
+
+    if property_type ~= nil then getter_lines[1] = getter_lines[1] .. ': ' .. property_type end
+    table.insert(methods, getter_lines)
+    table.insert(generated, getter_name)
+  end
+
+  if not is_readonly and not method_names[setter_name] then
+    local setter_signature = method_indent .. 'public function ' .. setter_name .. '('
+    if property_type ~= nil then setter_signature = setter_signature .. property_type .. ' ' end
+    setter_signature = setter_signature .. '$' .. property_name .. '): self'
+
+    table.insert(methods, {
+      setter_signature,
+      method_indent .. '{',
+      body_indent .. '$this->' .. property_name .. ' = $' .. property_name .. ';',
+      '',
+      body_indent .. 'return $this;',
+      method_indent .. '}',
+    })
+    table.insert(generated, setter_name)
+  end
+
+  if vim.tbl_isempty(methods) then
+    local skipped = is_readonly and getter_name .. ' (getter only for readonly property)' or 'getter and setter'
+    vim.notify('No accessors generated; class already has ' .. skipped, vim.log.levels.INFO)
+    return
+  end
+
+  local _, _, class_end_row, class_end_col = class_node:range()
+  local insert_row = class_end_row
+  local insert_col = math.max(class_end_col - 1, 0)
+  local previous_line = class_end_row > 0 and vim.api.nvim_buf_get_lines(buf, class_end_row - 1, class_end_row, false)[1] or ''
+  local new_lines = {}
+
+  if vim.trim(previous_line or '') ~= '' then table.insert(new_lines, '') end
+
+  for index, method_lines in ipairs(methods) do
+    if index > 1 then table.insert(new_lines, '') end
+    vim.list_extend(new_lines, method_lines)
+  end
+
+  vim.api.nvim_buf_set_text(buf, insert_row, insert_col, insert_row, insert_col, new_lines)
+  vim.notify('Generated ' .. table.concat(generated, ' and '), vim.log.levels.INFO)
 end
 
 local function set_function_return_type(buf, node, return_type)
@@ -357,6 +630,9 @@ function M.set_phpactor_keymaps(buf, run_phpactor_override)
   vim.keymap.set({ 'n', 'v' }, '<leader>pX', '<cmd>PhpactorExtractExpression<CR>', { buffer = buf, desc = '[P]HPActor e[X]tract expression' })
   vim.keymap.set('n', '<leader>pv', '<cmd>PhpactorChangeVisibility<CR>', { buffer = buf, desc = '[P]HPActor change [V]isibility' })
   vim.keymap.set('n', '<leader>pa', '<cmd>PhpactorGenerateAccessors<CR>', { buffer = buf, desc = '[P]HPActor gener[A]te accessors' })
+  vim.keymap.set('n', '<leader>pA', function()
+    php_property_accessors(buf)
+  end, { buffer = buf, desc = '[P]HPActor generate getter + setter' })
   vim.keymap.set('n', '<leader>pd', '<cmd>PhpactorGotoDefinition<CR>', { buffer = buf, desc = '[P]HPActor goto [D]efinition' })
   vim.keymap.set('n', '<leader>pD', '<cmd>PhpactorGotoType<CR>', { buffer = buf, desc = '[P]HPActor goto type [D]efinition' })
   vim.keymap.set('n', '<leader>pr', '<cmd>PhpactorGotoImplementations<CR>', { buffer = buf, desc = '[P]HPActor goto [R] implementations' })
@@ -470,13 +746,22 @@ function M.set_lsp_keymaps(buf, builtin)
   end
 
   -- LSP buffer-local mappings
+  pcall(vim.keymap.del, 'n', 'grn', { buffer = buf })
+  pcall(vim.keymap.del, 'n', 'grr', { buffer = buf })
+  pcall(vim.keymap.del, 'n', 'gra', { buffer = buf })
+  pcall(vim.keymap.del, 'n', 'grd', { buffer = buf })
+  pcall(vim.keymap.del, 'n', 'gri', { buffer = buf })
+  pcall(vim.keymap.del, 'n', 'grt', { buffer = buf })
+  pcall(vim.keymap.del, 'n', 'grD', { buffer = buf })
+
   map('grn', vim.lsp.buf.rename, '[R]e[n]ame')
-  map('grr', builtin.lsp_references, '[G]oto [R]eferences')
+  map('grr', builtin.lsp_references, '[G]oto [R]references')
   map('gra', vim.lsp.buf.code_action, '[G]oto Code [A]ction', { 'n', 'x' })
   map('grD', vim.lsp.buf.declaration, '[G]oto [D]eclaration')
   map('gri', builtin.lsp_implementations, '[G]oto [I]mplementation')
   map('grd', builtin.lsp_definitions, '[G]oto [D]efinition')
   map('grt', builtin.lsp_type_definitions, '[G]oto [T]ype Definition')
+
   map('gO', builtin.lsp_document_symbols, 'Open Document Symbols')
   map('gW', builtin.lsp_dynamic_workspace_symbols, 'Open Workspace Symbols')
 end

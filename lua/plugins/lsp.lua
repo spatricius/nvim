@@ -1,6 +1,4 @@
 local helpers = require 'helpers'
-local excluded_globs = helpers.excluded_globs()
-local phpactor_exclude_patterns = helpers.phpactor_exclude_patterns()
 
 local symfony_yaml_custom_tags = {
   '!service scalar',
@@ -13,22 +11,6 @@ local symfony_yaml_custom_tags = {
   '!abstract scalar',
   '!returns_clone scalar',
   '!iterator sequence',
-}
-
-local phpactor_lsp_config = {
-  cmd = { vim.fn.stdpath 'data' .. '/lazy/phpactor/bin/phpactor', 'language-server' },
-  settings = {
-    language_server = {
-      diagnostic_exclude_paths = {
-        unpack(phpactor_exclude_patterns),
-      },
-    },
-    indexer = {
-      exclude_patterns = {
-        unpack(phpactor_exclude_patterns),
-      },
-    },
-  },
 }
 
 _G.phpactor_root_directory = function() return helpers.project_root(0) end
@@ -94,6 +76,38 @@ return {
       vim.api.nvim_create_autocmd('LspAttach', {
         group = vim.api.nvim_create_augroup('config-lsp-attach', { clear = true }),
         callback = function(event)
+          local client = vim.lsp.get_client_by_id(event.data.client_id)
+
+          if client and client.name == 'intelephense' then
+            client.settings = vim.tbl_deep_extend('force', client.settings or {}, {
+              intelephense = {
+                files = {
+                  maxSize = 10000000,
+                  associations = { '*.php', '*.phtml' },
+                  exclude = {
+                    '**/.git/**',
+                    '**/node_modules/**',
+                    '**/var/cache/**',
+                  },
+                },
+                references = {
+                  exclude = {},
+                },
+                rename = {
+                  exclude = {},
+                },
+                index = {
+                  static = true,
+                },
+                completion = {
+                  fullyQualifyImportNames = true,
+                },
+              },
+            })
+
+            client:notify('workspace/didChangeConfiguration', { settings = client.settings })
+          end
+
           require('keymaps').set_lsp_keymaps(event.buf, {
             lsp_references = builtin.lsp_references,
             lsp_implementations = builtin.lsp_implementations,
@@ -103,13 +117,7 @@ return {
             lsp_dynamic_workspace_symbols = function() builtin.lsp_dynamic_workspace_symbols() end,
           })
 
-          local client = vim.lsp.get_client_by_id(event.data.client_id)
-
-          if client and client.name == 'phpactor' then
-            client.server_capabilities.completionProvider = nil
-          end
-
-          if client and client.name ~= 'phpactor' and client:supports_method('textDocument/documentHighlight', event.buf) then
+          if client and client:supports_method('textDocument/documentHighlight', event.buf) then
             local highlight_augroup = vim.api.nvim_create_augroup('config-lsp-highlight', { clear = false })
             vim.api.nvim_create_autocmd({ 'CursorHold', 'CursorHoldI' }, {
               buffer = event.buf,
@@ -142,36 +150,33 @@ return {
       ---@type table<string, vim.lsp.Config>
       local servers = {
         intelephense = {
+          root_dir = helpers.project_root,
           settings = {
             intelephense = {
               files = {
+                maxSize = 10000000,
+                associations = { "*.php", "*.phtml" },
                 exclude = {
-                  unpack(excluded_globs),
+                  "**/.git/**",
+                  "**/node_modules/**",
+                  "**/var/cache/**",
                 },
               },
-              phpdoc = {
-                typeLongNames = false, -- USE 'int' NOT 'integer'
+              references = {
+                exclude = {},
+              },
+              rename = {
+                exclude = {},
+              },
+              index = {
+                static = true,
               },
               completion = {
-                fullyQualifyImport = true,
-              },
-              stubs = {
-                'apache', 'bcmath', 'bz2', 'calendar', 'com_dotnet', 'Core', 'ctype', 'curl', 'date',
-                'hash', 'filter', 'ftp', 'gd', 'gettext', 'gmp', 'hash', 'iconv', 'imap', 'intl',
-                'json', 'ldap', 'libxml', 'mbstring', 'mcrypt', 'mysql', 'mysqli', 'password',
-                'pcntl', 'pcre', 'PDO', 'pdo_mysql', 'Phar', 'readline', 'recode', 'Reflection',
-                'session', 'SimpleXML', 'soap', 'sockets', 'sodium', 'SPL', 'standard', 'superglobals',
-                'sysvmsg', 'sysvsem', 'sysvshm', 'tokenizer', 'xml', 'xdebug', 'xmlreader', 'xmlwriter',
-                'yaml', 'zip', 'zlib',
-                'wordpress', 'phpunit', 'doctrine', 'symfony',
-              },
-              telemetry = {
-                enabled = false,
+                fullyQualifyImportNames = true,
               },
             },
           },
         },
-        phpactor = phpactor_lsp_config,
         yamlls = {
           settings = {
             yaml = {
@@ -186,7 +191,6 @@ return {
         },
         twiggy_language_server = {},
         ts_ls = {},
-        stylua = {},
         lua_ls = {
           root_dir = helpers.project_root,
           on_init = function(client)
@@ -215,28 +219,38 @@ return {
         },
       }
 
-      local ensure_installed = vim.tbl_filter(function(name) return name ~= 'phpactor' end, vim.tbl_keys(servers or {}))
+      local ensure_installed = vim.tbl_keys(servers or {})
+      table.insert(ensure_installed, 'stylua')
 
       require('mason-tool-installer').setup { ensure_installed = ensure_installed }
 
-      for name, server in pairs(servers) do
-        vim.lsp.config(name, server)
-        vim.lsp.enable(name)
-      end
+      local capabilities = require('blink.cmp').get_lsp_capabilities()
+      local lspconfig = require 'lspconfig'
+
+      require('mason-lspconfig').setup {
+        ensure_installed = vim.tbl_keys(servers or {}),
+        handlers = {
+          function(server_name)
+            local server = servers[server_name] or {}
+            server.capabilities = vim.tbl_deep_extend('force', {}, capabilities, server.capabilities or {})
+            lspconfig[server_name].setup(server)
+          end,
+        },
+      }
     end,
   },
   {
     'SmiteshP/nvim-navic',
     dependencies = { 'nvim-tree/nvim-web-devicons' },
     config = function()
-      require('nvim-navic').setup {
-        highlight = true,
-        safe_output = true,
-        lsp = {
-          auto_attach = true,
-          preference = { 'intelephense', 'phpactor' },
-        },
-      }
+        require('nvim-navic').setup {
+          highlight = true,
+          safe_output = true,
+          lsp = {
+            auto_attach = true,
+            preference = { 'intelephense' },
+          },
+        }
     end,
   },
   {

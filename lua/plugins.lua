@@ -22,7 +22,9 @@ local specs = {
       require('mini.surround').setup()
       require('mini.comment').setup()
       require('mini.move').setup()
-      require('mini.operators').setup()
+      require('mini.operators').setup {
+        replace = { prefix = '' }, -- Disable 'gr' conflict with LSP
+      }
 
       local mini_snippets = require 'mini.snippets'
       mini_snippets.setup {
@@ -42,8 +44,9 @@ local specs = {
         use_icons = vim.g.have_nerd_font,
         content = {
           active = function()
-            local mode, mode_hl = statusline.section_mode { trunc_width = 120 }
-            local git = statusline.section_git { trunc_width = 40 }
+            local mode, mode_hl = statusline.section_mode { trunc_width = math.huge }
+            local summary = vim.b.minigit_summary_string or vim.b.gitsigns_head
+            local git = statusline.is_truncated(40) and '' or summary and ((vim.g.have_nerd_font and '' or 'Git') .. ' ' .. (#summary > 20 and summary:sub(1, 20) .. '...' or summary)) or ''
             local diff = statusline.section_diff { trunc_width = 75 }
             local diagnostics = statusline.section_diagnostics { trunc_width = 75 }
             local lsp = statusline.section_lsp { trunc_width = 75 }
@@ -58,11 +61,11 @@ local specs = {
 
             return statusline.combine_groups {
               { hl = mode_hl, strings = { mode } },
-              { hl = 'MiniStatuslineDevinfo', strings = { git, diff, diagnostics, lsp } },
+              { hl = 'MiniStatuslineDevinfo', strings = { git, diff, diagnostics } },
               '%<',
               { hl = 'MiniStatuslineFilename', strings = { filename, navic_location } },
               '%=',
-              { hl = 'MiniStatuslineFileinfo', strings = { fileinfo } },
+              -- { hl = 'MiniStatuslineFileinfo', strings = { fileinfo } },
               { hl = mode_hl, strings = { search, location } },
             }
           end,
@@ -93,6 +96,16 @@ local specs = {
     opts = {
       delay = 0,
       icons = { mappings = vim.g.have_nerd_font },
+      disable = {
+        ft = {
+          'dapui_breakpoints',
+          'dapui_console',
+          'dapui_hover',
+          'dapui_scopes',
+          'dapui_stacks',
+          'dapui_watches',
+        },
+      },
       spec = {
         { '<leader>c', group = '[C]onsole' },
         { '<leader>g', group = '[G]it' },
@@ -162,6 +175,20 @@ local specs = {
       formatters_by_ft = {
         lua = { 'stylua' },
         php = { 'php_cs_fixer' },
+      },
+      formatters = {
+        php_cs_fixer = {
+          command = function(_, ctx)
+            local helpers = require 'helpers'
+            local local_cmd = vim.fs.joinpath(helpers.composer_bin_dir(ctx.filename), 'php-cs-fixer')
+            if vim.uv.fs_stat(local_cmd) ~= nil then return local_cmd end
+            return 'php-cs-fixer'
+          end,
+          cwd = function(_, ctx)
+            local helpers = require 'helpers'
+            return helpers.project_root(ctx.filename)
+          end,
+        },
       },
     },
   },

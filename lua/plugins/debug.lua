@@ -20,7 +20,7 @@ return {
       automatic_installation = true,
       handlers = {},
       ensure_installed = {
-        'php-debug-adapter',
+        'php',
       },
     }
 
@@ -30,9 +30,11 @@ return {
         request = 'launch',
         name = 'Listen for Xdebug',
         port = 9003,
+        log = true,
         pathMappings = {
           ['/var/www'] = '${workspaceFolder}',
         },
+        skipFiles = {},
         hostname = '0.0.0.0',
         stopOnEntry = false,
       },
@@ -42,8 +44,8 @@ return {
     dapui.setup {
       icons = { expanded = '▾', collapsed = '▸', current_frame = '*' },
       mappings = {
-        expand = { 'za', '<2-LeftMouse>' },
-        open = { '<CR>', 'o' },
+        expand = { 'za', '<LeftMouse>', '<2-LeftMouse>', '<CR>', 'o' },
+        open = { 'O' },
         remove = 'd',
         edit = 'e',
         repl = 'r',
