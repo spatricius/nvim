@@ -1,5 +1,7 @@
 local helpers = require 'helpers'
 
+local phpactor_binpath = vim.fn.stdpath 'data' .. '/lazy/phpactor/bin/phpactor'
+
 local symfony_yaml_custom_tags = {
   '!service scalar',
   '!tagged scalar',
@@ -26,6 +28,21 @@ local function run_phpactor_override(buf)
   end
 
   return true
+end
+
+local function disable_phpactor_lsp_overlap(client)
+  client.server_capabilities.completionProvider = nil
+  client.server_capabilities.declarationProvider = false
+  client.server_capabilities.definitionProvider = false
+  client.server_capabilities.documentHighlightProvider = false
+  client.server_capabilities.documentSymbolProvider = false
+  client.server_capabilities.hoverProvider = false
+  client.server_capabilities.implementationProvider = false
+  client.server_capabilities.inlayHintProvider = false
+  client.server_capabilities.referencesProvider = false
+  client.server_capabilities.signatureHelpProvider = false
+  client.server_capabilities.typeDefinitionProvider = false
+  client.server_capabilities.workspaceSymbolProvider = false
 end
 
 vim.cmd [[
@@ -72,13 +89,32 @@ return {
     },
     config = function()
       local builtin = require 'telescope.builtin'
+      local phpactor_capabilities = nil
+
+      local function start_phpactor(bufnr)
+        if vim.bo[bufnr].filetype ~= 'php' then return end
+
+        local path = vim.api.nvim_buf_get_name(bufnr)
+        if path == '' then return end
+
+        vim.lsp.start({
+          name = 'phpactor',
+          cmd = { 'php', phpactor_binpath, 'language-server' },
+          filetypes = { 'php' },
+          root_dir = helpers.project_root(path),
+          capabilities = vim.tbl_deep_extend('force', {}, phpactor_capabilities or {}),
+        }, { bufnr = bufnr })
+      end
 
       vim.api.nvim_create_autocmd('LspAttach', {
         group = vim.api.nvim_create_augroup('config-lsp-attach', { clear = true }),
         callback = function(event)
           local client = vim.lsp.get_client_by_id(event.data.client_id)
 
+          if client and client.name == 'phpactor' then disable_phpactor_lsp_overlap(client) end
+
           if client and client.name == 'intelephense' then
+            client.server_capabilities.renameProvider = false
             client.settings = vim.tbl_deep_extend('force', client.settings or {}, {
               intelephense = {
                 files = {
@@ -225,6 +261,7 @@ return {
       require('mason-tool-installer').setup { ensure_installed = ensure_installed }
 
       local capabilities = require('blink.cmp').get_lsp_capabilities()
+      phpactor_capabilities = capabilities
       local lspconfig = require 'lspconfig'
 
       require('mason-lspconfig').setup {
@@ -237,6 +274,18 @@ return {
           end,
         },
       }
+
+      vim.api.nvim_create_autocmd('FileType', {
+        group = vim.api.nvim_create_augroup('config-phpactor-lsp', { clear = true }),
+        pattern = 'php',
+        callback = function(args)
+          start_phpactor(args.buf)
+        end,
+      })
+
+      for _, bufnr in ipairs(vim.api.nvim_list_bufs()) do
+        if vim.api.nvim_buf_is_loaded(bufnr) then start_phpactor(bufnr) end
+      end
     end,
   },
   {
@@ -265,7 +314,7 @@ return {
         pattern = 'php',
         callback = function(args)
           vim.g.phpactorPhpBin = 'php'
-          vim.g.phpactorbinpath = vim.fn.stdpath 'data' .. '/lazy/phpactor/bin/phpactor'
+          vim.g.phpactorbinpath = phpactor_binpath
           require('keymaps').set_phpactor_keymaps(args.buf, run_phpactor_override)
         end,
       })
