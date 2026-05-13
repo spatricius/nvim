@@ -1,6 +1,67 @@
 local M = {}
 
 local excluded_dirs = { 'node_modules', 'var' }
+local included_dirs = { 'var/logs' }
+local telescope_ignore_file = nil
+
+local function path_glob(path)
+  return ('**/%s/**'):format(path)
+end
+
+local function path_lua_pattern(path)
+  return path:gsub('([^%w])', '%%%1')
+end
+
+local function is_included_parent(path)
+  local prefix = '^' .. path_lua_pattern(path) .. '/'
+
+  for _, included_path in ipairs(included_dirs) do
+    if included_path == path or included_path:match(prefix) ~= nil then return true end
+  end
+
+  return false
+end
+
+local function included_parent_paths(path)
+  local parents = {}
+  local current = path
+
+  while true do
+    local parent = current:match('^(.+)/[^/]+$')
+    if parent == nil then break end
+    table.insert(parents, 1, parent)
+    current = parent
+  end
+
+  return parents
+end
+
+local function telescope_ignore_file_path()
+  if telescope_ignore_file ~= nil and vim.uv.fs_stat(telescope_ignore_file) ~= nil then return telescope_ignore_file end
+
+  local lines = {}
+
+  for _, path in ipairs(excluded_dirs) do
+    table.insert(lines, path_glob(path))
+  end
+
+  for _, path in ipairs(included_dirs) do
+    for _, parent in ipairs(included_parent_paths(path)) do
+      table.insert(lines, '!' .. parent .. '/')
+    end
+
+    table.insert(lines, '!' .. path .. '/')
+    table.insert(lines, '!' .. path_glob(path))
+  end
+
+  local cache_dir = vim.fn.stdpath 'cache'
+  vim.fn.mkdir(cache_dir, 'p')
+
+  telescope_ignore_file = vim.fs.joinpath(cache_dir, 'telescope-rg.ignore')
+  vim.fn.writefile(lines, telescope_ignore_file)
+
+  return telescope_ignore_file
+end
 
 local function is_absolute_path(path)
   return type(path) == 'string' and (path:match '^/' ~= nil or path:match '^%a:[/\\]' ~= nil)
@@ -106,7 +167,7 @@ function M.excluded_globs()
   local globs = {}
 
   for _, dir in ipairs(excluded_dirs) do
-    table.insert(globs, ('**/%s/**'):format(dir))
+    table.insert(globs, path_glob(dir))
   end
 
   return globs
@@ -126,20 +187,48 @@ end
 function M.telescope_file_ignore_patterns(opts)
   local patterns = opts and opts.include_git and { '^.git/' } or {}
 
-  for _, dir in ipairs(excluded_dirs) do
-    table.insert(patterns, ('^%s/'):format(dir))
-    table.insert(patterns, ('/%s/'):format(dir))
+  for _, path in ipairs(excluded_dirs) do
+    if not is_included_parent(path) then
+      table.insert(patterns, ('^%s/'):format(path))
+      table.insert(patterns, ('/%s/'):format(path))
+    end
   end
 
   return patterns
 end
 
-function M.telescope_grep_additional_args()
-  local args = { '--no-ignore' }
+function M.telescope_find_command()
+  local command = {
+    'rg',
+    '--files',
+    '--follow',
+    '--hidden',
+    '--no-ignore',
+    '--ignore-file',
+    telescope_ignore_file_path(),
+    '--glob=!.git/**',
+  }
 
-  for _, glob in ipairs(M.excluded_globs()) do
-    table.insert(args, '--glob=!' .. glob)
-  end
+  return command
+end
+
+function M.telescope_vimgrep_arguments()
+  local args = {
+    'rg',
+    '--color=never',
+    '--no-heading',
+    '--with-filename',
+    '--line-number',
+    '--column',
+    '--smart-case',
+    '--hidden',
+    '--follow',
+    '--no-ignore',
+    '--ignore-file',
+    telescope_ignore_file_path(),
+    '--glob=!.git/**',
+    '--glob=!var/logs/**',
+  }
 
   return args
 end

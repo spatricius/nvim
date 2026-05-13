@@ -58,6 +58,7 @@ return {
 
     telescope.setup {
       defaults = {
+        vimgrep_arguments = helpers.telescope_vimgrep_arguments(),
         mappings = {
           i = {
             ['<M-t>'] = open_with_trouble,
@@ -92,22 +93,22 @@ return {
         builtin.find_files {
           hidden = true,
           no_ignore = true,
+          find_command = helpers.telescope_find_command(),
           sorter = vendor_file_sorter(),
           file_ignore_patterns = helpers.telescope_file_ignore_patterns { include_git = true },
         }
       end,
       grep_word = function()
-        builtin.grep_string { sorter = vendor_generic_sorter(), additional_args = helpers.telescope_grep_additional_args }
+        builtin.grep_string { sorter = vendor_generic_sorter() }
       end,
       live_grep = function()
-        live_grep_args { sorter = vendor_generic_sorter(), additional_args = helpers.telescope_grep_additional_args }
+        live_grep_args { sorter = vendor_generic_sorter() }
       end,
       open_files_grep = function()
         builtin.live_grep {
           grep_open_files = true,
           prompt_title = 'Live Grep in Open Files',
           sorter = vendor_generic_sorter(),
-          additional_args = helpers.telescope_grep_additional_args,
         }
       end,
       find_nvim_files = function()
